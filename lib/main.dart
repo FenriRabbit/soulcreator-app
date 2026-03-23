@@ -19,6 +19,32 @@ class MyApp extends StatelessWidget {
 }
 
 /// =========================
+/// 🧠 橢圓軌道模型（核心）
+/// =========================
+class EllipseTrack {
+  final Rect rect;
+
+  EllipseTrack(this.rect);
+
+  double get a => rect.width / 2;
+
+  double get b => rect.height / 2;
+
+  Offset get center => rect.center;
+
+  Offset point(double t) {
+    final x = center.dx + a * cos(t);
+    final y = center.dy - b * sin(t);
+    return Offset(x, y);
+  }
+
+  /// 切線角度（讓卡片貼弧）
+  double tangent(double t) {
+    return atan2(b * cos(t), -a * sin(t));
+  }
+}
+
+/// =========================
 /// 卡片資料模型
 /// =========================
 class CardModel {
@@ -46,32 +72,35 @@ class CardModel {
 }
 
 /// =========================
-/// 🎨 圓弧基準線 Painter
+/// 🎨 橢圓基準線（上半部）
 /// =========================
-class ArcGuidePainter extends CustomPainter {
-  final double radius;
-  final Offset center;
-  final double startAngle;
-  final double sweepAngle;
+class EllipseGuidePainter extends CustomPainter {
+  final Rect rect;
 
-  ArcGuidePainter({
-    required this.radius,
-    required this.center,
-    required this.startAngle,
-    required this.sweepAngle,
-  });
+  EllipseGuidePainter({required this.rect});
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.white
+      ..color = Colors.red
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
-      // ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4); // 🔥 發光感
+      ..strokeWidth = 3;
 
-    final rect = Rect.fromCircle(center: center, radius: radius);
+    /// 上半橢圓
+    canvas.drawArc(
+      rect,
+      pi, // 左
+      pi, // 畫到右（上半）
+      false,
+      paint,
+    );
 
-    canvas.drawArc(rect, startAngle, sweepAngle, false, paint);
+    /// Debug：畫矩形（藍框）
+    final debugPaint = Paint()
+      ..color = Colors.blue
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawRect(rect, debugPaint);
   }
 
   @override
@@ -95,13 +124,7 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
   final double cardWidth = 150;
   final double cardHeight = 320;
 
-  /// =========================
-  /// 🔵 圓弧參數（給 Painter 用）
-  /// =========================
-  double arcRadius = 0;
-  double arcStartAngle = 0;
-  double arcEndAngle = 0;
-  Offset arcCenter = Offset.zero;
+  Rect? ellipseRect;
 
   @override
   void initState() {
@@ -149,38 +172,41 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
   }
 
   /// =========================
-  /// 🌙 弧形展開（升級版）
+  /// 🌙 橢圓展開（重點）
   /// =========================
   Future<void> arcSpread() async {
     await runAnimation(() {
       final size = MediaQuery.of(context).size;
 
-      final double radius = size.width * 0.9;
+      /// 🔵 定義你的「控制矩形」
+      final rect = Rect.fromLTWH(
+        40,
+        size.height * 0.3,
+        size.width - 80,
+        size.height * 0.4,
+      );
 
-      final double centerX = size.width / 2;
-      final double centerY = size.height + radius * 0.2;
+      ellipseRect = rect;
 
-      final double startAngle = -pi / 2 - 0.7;
-      final double endAngle = -pi / 2 + 0.7;
+      final track = EllipseTrack(rect);
 
-      /// 👉 記錄給 Painter
-      arcRadius = radius;
-      arcStartAngle = startAngle;
-      arcEndAngle = endAngle;
-      arcCenter = Offset(centerX, centerY);
+      final startAngle = pi * 0.2;
+      final endAngle = pi * 0.8;
 
       for (int i = 0; i < cards.length; i++) {
         double t = i / (cards.length - 1);
         double angle = lerpDouble(startAngle, endAngle, t)!;
 
-        /// 🔥 重點：用「卡片中心」貼圓
-        final double cardCenterX = centerX + radius * cos(angle);
-        final double cardCenterY = centerY + radius * sin(angle);
+        final point = track.point(angle);
 
-        cards[i].targetX = cardCenterX - cardWidth / 2;
-        cards[i].targetY = cardCenterY - cardHeight / 2;
+        cards[i].targetX = point.dx - (cardWidth / 2);
+        cards[i].targetY = point.dy - (cardHeight / 2) + (rect.height/2);
 
-        cards[i].targetR = angle + pi / 2;
+        final dx = track.center.dx - point.dx;
+        final dy = track.center.dy - point.dy;
+
+        // TODO: 這行要動態調整每張卡片的角度
+        cards[i].targetR = 0;
       }
     });
   }
@@ -215,23 +241,14 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
       backgroundColor: Colors.green[900],
       body: Stack(
         children: [
-          /// =========================
-          /// 🎯 圓弧基準線（重點）
-          /// =========================
-          if (arcRadius > 0)
+          /// 🎯 橢圓基準線
+          if (ellipseRect != null)
             CustomPaint(
               size: Size.infinite,
-              painter: ArcGuidePainter(
-                radius: arcRadius,
-                center: arcCenter,
-                startAngle: arcStartAngle,
-                sweepAngle: arcEndAngle - arcStartAngle,
-              ),
+              painter: EllipseGuidePainter(rect: ellipseRect!),
             ),
 
-          /// =========================
-          /// 🎴 卡片層
-          /// =========================
+          /// 🎴 卡片
           ...cards.map((card) {
             return Positioned(
               left: card.x,
@@ -250,18 +267,13 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
                     ],
                   ),
                   alignment: Alignment.center,
-                  child: Text(
-                    "${card.id}",
-                    style: const TextStyle(fontSize: 18),
-                  ),
+                  child: Text("${card.id}"),
                 ),
               ),
             );
           }),
 
-          /// =========================
           /// 🎮 控制
-          /// =========================
           Positioned(
             bottom: 100,
             left: 0,
