@@ -23,12 +23,13 @@ class MyApp extends StatelessWidget {
 /// =========================
 class EllipseTrack {
   final Rect rect;
+  final double flattenFactor;
 
-  EllipseTrack(this.rect);
+  EllipseTrack(this.rect, {this.flattenFactor = 1.0});
 
   double get a => rect.width / 2;
 
-  double get b => rect.height / 2;
+  double get b => (rect.height / 2) * flattenFactor;
 
   Offset get center => rect.center;
 
@@ -36,11 +37,6 @@ class EllipseTrack {
     final x = center.dx + a * cos(t);
     final y = center.dy - b * sin(t);
     return Offset(x, y);
-  }
-
-  /// 切線角度（讓卡片貼弧）
-  double tangent(double t) {
-    return atan2(b * cos(t), -a * sin(t));
   }
 }
 
@@ -62,7 +58,12 @@ class CardModel {
   double targetY;
   double targetR;
 
-  CardModel({required this.id, this.x = 0, this.y = 0, this.rotation = 0})
+  double angle;
+
+  bool isChoose;
+  bool isSelected;
+
+  CardModel({required this.id, this.x = 0, this.y = 0, this.rotation = 0, this.angle = 0, this.isChoose = false, this.isSelected = false})
     : startX = 0,
       startY = 0,
       startR = 0,
@@ -76,8 +77,9 @@ class CardModel {
 /// =========================
 class EllipseGuidePainter extends CustomPainter {
   final Rect rect;
+  final double flattenFactor;
 
-  EllipseGuidePainter({required this.rect});
+  EllipseGuidePainter({required this.rect, this.flattenFactor = 1.0});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -86,21 +88,29 @@ class EllipseGuidePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3;
 
-    /// 上半橢圓
-    canvas.drawArc(
-      rect,
-      pi, // 左
-      pi, // 畫到右（上半）
-      false,
-      paint,
+    /// 🎯 壓縮後的橢圓 rect（關鍵）
+    final flattenedRect = Rect.fromCenter(
+      center: rect.center,
+      width: rect.width,
+      height: rect.height * flattenFactor,
     );
 
-    /// Debug：畫矩形（藍框）
+    /// 上半橢圓
+    canvas.drawArc(flattenedRect, pi, pi, false, paint);
+
+    /// Debug：原始矩形（藍）
     final debugPaint = Paint()
       ..color = Colors.blue
       ..style = PaintingStyle.stroke;
 
     canvas.drawRect(rect, debugPaint);
+
+    /// Debug：壓縮後矩形（綠）
+    final debugFlattenPaint = Paint()
+      ..color = Colors.green
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawRect(flattenedRect, debugFlattenPaint);
   }
 
   @override
@@ -125,6 +135,7 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
   final double cardHeight = 320;
 
   Rect? ellipseRect;
+  final flattenFactor = 0.5;
 
   @override
   void initState() {
@@ -188,7 +199,7 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
 
       ellipseRect = rect;
 
-      final track = EllipseTrack(rect);
+      final track = EllipseTrack(rect, flattenFactor: flattenFactor);
 
       final startAngle = pi * 0.2;
       final endAngle = pi * 0.8;
@@ -196,17 +207,16 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
       for (int i = 0; i < cards.length; i++) {
         double t = i / (cards.length - 1);
         double angle = lerpDouble(startAngle, endAngle, t)!;
+        cards[i].angle = angle; // 儲存卡片當前角度
 
+        // 位置(XY軸)
         final point = track.point(angle);
-
         cards[i].targetX = point.dx - (cardWidth / 2);
-        cards[i].targetY = point.dy - (cardHeight / 2) + (rect.height/2);
+        cards[i].targetY = point.dy - (cardHeight / 2) + (rect.height / 2);
 
-        final dx = track.center.dx - point.dx;
-        final dy = track.center.dy - point.dy;
-
-        // TODO: 這行要動態調整每張卡片的角度
-        cards[i].targetR = 0;
+        // 角度(R)
+        double maxAngle = 15 * pi / 180;
+        cards[i].targetR = lerpDouble(maxAngle, -maxAngle, t)!;
       }
     });
   }
@@ -239,60 +249,146 @@ class _ArcSpreadDemoState extends State<ArcSpreadDemo>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.green[900],
-      body: Stack(
-        children: [
-          /// 🎯 橢圓基準線
-          if (ellipseRect != null)
-            CustomPaint(
-              size: Size.infinite,
-              painter: EllipseGuidePainter(rect: ellipseRect!),
-            ),
-
-          /// 🎴 卡片
-          ...cards.map((card) {
-            return Positioned(
-              left: card.x,
-              top: card.y,
-              child: Transform(
-                alignment: Alignment.center,
-                transform: Matrix4.identity()..rotateZ(card.rotation),
-                child: Container(
-                  width: cardWidth,
-                  height: cardHeight,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: const [
-                      BoxShadow(blurRadius: 6, color: Colors.black26),
-                    ],
-                  ),
-                  alignment: Alignment.center,
-                  child: Text("${card.id}"),
+      body: GestureDetector(
+        onPanUpdate: (details) {
+          _handleTouch(details.localPosition);
+        },
+        child: Stack(
+          children: [
+            /// 🎯 橢圓基準線
+            if (ellipseRect != null)
+              CustomPaint(
+                size: Size.infinite,
+                painter: EllipseGuidePainter(
+                  rect: ellipseRect!,
+                  flattenFactor: flattenFactor,
                 ),
               ),
-            );
-          }),
 
-          /// 🎮 控制
-          Positioned(
-            bottom: 100,
-            left: 0,
-            right: 0,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ElevatedButton(
-                  onPressed: arcSpread,
-                  child: const Text("Arc Spread"),
+            /// 🎴 卡片
+            ...cards.map((card) {
+              final offset = _getLiftOffset(card); // Choose時的偏移
+
+              return Positioned(
+                left: card.x + offset.dx,
+                top: card.y + offset.dy,
+                child: Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.identity()..rotateZ(card.rotation),
+                  child: Stack(
+                    clipBehavior: Clip.none, // ⭐ 讓文字可以超出卡片
+                    alignment: Alignment.center,
+                    children: [
+                      /// 🎴 卡片（底層）
+                      Container(
+                        width: cardWidth,
+                        height: cardHeight,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: const [
+                            BoxShadow(blurRadius: 6, color: Colors.black26),
+                          ],
+                        ),
+                      ),
+
+                      /// 🏷️ 文字（上層，往上浮）
+                      if (card.isChoose)
+                      Positioned(
+                        top: -50, // ⭐ 關鍵：往上偏移
+                        child: AnimatedOpacity(
+                          duration: Duration(milliseconds: 150),
+                          opacity: card.isChoose ? 1 : 0,
+                          child: _cardLabelWidget(card),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                const SizedBox(width: 20),
-                ElevatedButton(onPressed: gather, child: const Text("Gather")),
-              ],
+              );
+            }),
+
+            /// 🎮 控制
+            Positioned(
+              bottom: 100,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: arcSpread,
+                    child: const Text("Arc Spread"),
+                  ),
+                  const SizedBox(width: 20),
+                  ElevatedButton(onPressed: gather, child: const Text("Gather")),
+                ],
+              ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cardLabelWidget(CardModel card) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 10,
+        vertical: 5,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.75),
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black54,
+            blurRadius: 6,
+            offset: Offset(0, 2),
           ),
         ],
       ),
+      child: Text(
+        "Card ${card.id}",
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.5,
+        ),
+      ),
     );
+  }
+
+  void _handleTouch(Offset touchPos) {
+    CardModel? hitCard;
+
+    // 從最上層往下找
+    for (var card in cards.reversed) {
+      final rect = Rect.fromLTWH(card.x, card.y, cardWidth, cardHeight);
+
+      if (rect.contains(touchPos)) {
+        hitCard = card;
+        break;
+      }
+    }
+
+    for (var card in cards) {
+      card.isChoose = (card == hitCard);
+    }
+
+    setState(() {});
+  }
+
+  Offset _getLiftOffset(CardModel card) {
+    if (!card.isChoose) return Offset.zero;
+
+    const lift = 20.0;
+
+    final dx = cos(card.angle);
+    final dy = -sin(card.angle);
+
+    return Offset(dx * lift, dy * lift);
   }
 
   @override
